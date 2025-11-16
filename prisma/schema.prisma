@@ -1,0 +1,56 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// 1. GAME CONFIGURATION (Untuk Rumus Backend)
+// ==========================================
+// Kita simpan nilai poin di sini agar bisa diedit via Admin Panel
+// tanpa mengubah kodingan.
+model GameRule {
+  id          Int    @id @default(autoincrement())
+  key         String @unique // Contoh: "cost_neutral", "cap_tier_1"
+  value       Int    // Nilai poinnya. Contoh: 20
+  description String? // Penjelasan (Opsional)
+}
+
+// ==========================================
+// 2. DATA MASTER (Data Statis)
+// ==========================================
+
+// Tabel untuk menyimpan data Karakter (Combatant)
+model Combatant {
+  id        Int      @id @default(autoincrement())
+  name      String
+  imageUrl  String?  // Link gambar potrait karakter
+  createdAt DateTime @default(now())
+  
+  // Relasi: Satu combatant punya banyak kartu bawaan
+  cards     CardTemplate[] 
+}
+
+// Tabel untuk menyimpan "Database Kartu" (Basic, Unique, Neutral, Monster)
+model CardTemplate {
+  id          Int      @id @default(autoincrement())
+  name        String
+  type        String   // "Basic", "Unique", "Neutral", "Monster", "Forbidden"
+  imageUrl    String?  // Gambar polosan (Raw Image)
+  description String?  // Efek kartu (Teks untuk overlay)
+  
+  // Field khusus untuk tampilan overlay CSS
+  cost        Int      @default(0) // Cost energi (bukan faint memory) yg tampil di kartu
+  tags        String?  // Contoh: "Exhaust, Retain" (dipisah koma)
+
+  // Relasi: Jika kartu ini milik spesifik karakter (Basic/Unique)
+  combatantId Int?     
+  combatant   Combatant? @relation(fields: [combatantId], references: [id])
+
+  createdAt   DateTime @default(now())
+}
