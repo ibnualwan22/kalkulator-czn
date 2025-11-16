@@ -1,11 +1,16 @@
-// src/app/api/upload/route.js
 import { NextResponse } from "next/server";
-import path from "path";
-import { writeFile } from "fs/promises";
+import { v2 as cloudinary } from "cloudinary";
+
+// 1. Konfigurasi Cloudinary
+cloudinary.config({
+  cloud_name: process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 export async function POST(request) {
   try {
-    // 1. Terima data file dari Frontend
+    // 2. Ambil file dari form data
     const formData = await request.formData();
     const file = formData.get("file");
 
@@ -13,27 +18,34 @@ export async function POST(request) {
       return NextResponse.json({ error: "No file received." }, { status: 400 });
     }
 
-    // 2. Ubah file menjadi Buffer (agar bisa disimpan)
-    const buffer = Buffer.from(await file.arrayBuffer());
+    // 3. Ubah file menjadi Buffer agar bisa dikirim lewat memori
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
 
-    // 3. Buat nama file unik (agar tidak bentrok)
-    // Contoh: image_123456789.png
-    const filename = file.name.replaceAll(" ", "_");
-    const uniqueName = Date.now() + "_" + filename;
+    // 4. Upload ke Cloudinary (menggunakan Promise agar kita bisa menunggu hasilnya)
+    const uploadResult = await new Promise((resolve, reject) => {
+      cloudinary.uploader.upload_stream(
+        {
+          folder: "czn-calculator", // Nama folder di Cloudinary (bebas)
+        },
+        (error, result) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve(result);
+          }
+        }
+      ).end(buffer);
+    });
 
-    // 4. Simpan ke folder public/uploads
-    // Note: process.cwd() adalah folder root project
-    const filePath = path.join(process.cwd(), "public/uploads", uniqueName);
-    await writeFile(filePath, buffer);
-
-    // 5. Kembalikan Alamat URL gambarnya
+    // 5. Kembalikan URL gambar yang ada di internet (secure_url)
     return NextResponse.json({ 
       success: true, 
-      url: `/uploads/${uniqueName}` 
+      url: uploadResult.secure_url 
     });
 
   } catch (error) {
     console.error("Upload Error:", error);
-    return NextResponse.json({ error: "Upload failed." }, { status: 500 });
+    return NextResponse.json({ error: "Upload to Cloudinary failed." }, { status: 500 });
   }
 }
