@@ -44,9 +44,9 @@ export default function Home() {
     <main className="min-h-screen bg-slate-900 text-white p-8 font-sans relative pb-32">
       {/* 1. Header */}
       <h1 className="text-3xl font-bold mb-2 text-cyan-400">
-        Chaos Zero Nightmare <span className="text-white text-lg">Calculator</span>
+        Chaos Zero Nightmare
       </h1>
-      <p className="text-slate-400 mb-8">Pilih Combatant untuk memulai simulasi (Maks 3).</p>
+      <p className="text-slate-400 mb-8">Pilih Combatant untuk memulai simulasi dan meracik deck impianmu (Maks 3).</p>
 
       {/* 2. Grid Pemilihan Combatant */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
