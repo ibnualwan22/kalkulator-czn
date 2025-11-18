@@ -646,7 +646,7 @@ function CalculatorLogic() {
                             className="py-3 bg-purple-700 hover:bg-purple-600 disabled:opacity-30 rounded text-sm font-bold flex flex-col items-center gap-1"
                         >
                             <span>Convert</span>
-                            <span className="text-[9px] opacity-80">Cost: +{getRule('action_convert', 10) + getRule('cost_neutral', 20)}</span>
+                            <span className="text-[9px] opacity-80">Cost: +{getRule('action_convert', 10)}</span>
                         </button>
                     </div>
                 </div>
