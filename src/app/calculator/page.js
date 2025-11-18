@@ -571,6 +571,9 @@ function CalculatorLogic() {
                                     <div>
                                         <span className={`text-[8px] font-bold uppercase px-1 rounded shadow-md ${card.isConverted ? 'bg-yellow-500 text-black' : 'bg-slate-200 text-black'}`}>{card.isConverted ? 'CONVERTED' : card.type}</span>
                                         <div className="font-bold text-sm leading-tight mb-1 mt-1 drop-shadow-md">{card.name}</div>
+                                        <p className="text-[9px] text-slate-200 line-clamp-2 leading-tight font-light opacity-90 drop-shadow-sm">
+                                            {card.description || "-"}
+                                        </p>
                                     </div>
                                 </div>
                             </div>
