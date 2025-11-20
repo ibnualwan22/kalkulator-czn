@@ -3,48 +3,6 @@ import { useState, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 
-// Komponen Floating Action Button
-function FloatingActionMenu({ onResetAll }) {
-  const [isOpen, setIsOpen] = useState(false);
-
-  return (
-    <div className="fixed bottom-8 right-8 z-50">
-      {/* Menu Items */}
-      <div className={`absolute bottom-16 right-0 flex flex-col gap-3 transition-all duration-300 ${isOpen ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4 pointer-events-none'}`}>
-        <Link
-          href="/"
-          className="flex items-center gap-3 bg-slate-700 hover:bg-slate-600 text-white px-4 py-3 rounded-full shadow-lg transition-all"
-        >
-          <span className="text-sm font-bold">Home</span>
-          <div className="w-10 h-10 bg-slate-800 rounded-full flex items-center justify-center">
-            🏠
-          </div>
-        </Link>
-        <button
-          onClick={() => {
-            onResetAll();
-            setIsOpen(false);
-          }}
-          className="flex items-center gap-3 bg-red-700 hover:bg-red-600 text-white px-4 py-3 rounded-full shadow-lg transition-all"
-        >
-          <span className="text-sm font-bold">Reset All</span>
-          <div className="w-10 h-10 bg-red-800 rounded-full flex items-center justify-center">
-            ↻
-          </div>
-        </button>
-      </div>
-
-      {/* Main FAB Button */}
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className={`w-16 h-16 rounded-full bg-cyan-600 hover:bg-cyan-500 text-white shadow-2xl flex items-center justify-center text-2xl font-bold transition-all ${isOpen ? 'rotate-45' : 'rotate-0'}`}
-      >
-        +
-      </button>
-    </div>
-  );
-}
-
 export default function CalculatorPage() {
   return (
     <Suspense fallback={<div className="text-white p-10">Loading Route...</div>}>
@@ -63,16 +21,24 @@ function CalculatorLogic() {
   const [miscCards, setMiscCards] = useState([]);
   const [chaosTier, setChaosTier] = useState(1);
   
+  // --- STATE UTAMA ---
   const [activeTeam, setActiveTeam] = useState([]);
-  const [globalCounters, setGlobalCounters] = useState({ duplication: 0, removal: 0 });
 
-  const [historyStack, setHistoryStack] = useState([]);
+  // Undo History (Personal per player)
+  const [historyStacks, setHistoryStacks] = useState({});
+  
+  // Cache untuk Reset
   const [initialDataCache, setInitialDataCache] = useState({ combatants: [] });
 
+  // Modals
   const [modalData, setModalData] = useState(null);
   const [addCardModal, setAddCardModal] = useState(null); 
   const [convertSelector, setConvertSelector] = useState(null);
+  
+  // Track kartu yang sedang dihapus untuk animasi
+  const [deletingCard, setDeletingCard] = useState(null);
 
+  // --- INIT DATA ---
   useEffect(() => {
     async function initData() {
       try {
@@ -84,16 +50,8 @@ function CalculatorLogic() {
           result.data.rules.forEach((r) => (ruleMap[r.key] = r.value));
           setRules(ruleMap);
           setMiscCards(result.data.miscCards);
-
           setInitialDataCache({ combatants: result.data.combatants });
-
-          // Cek apakah ini restore mode (dari change combatant)
-          const isRestore = searchParams.get("restore") === "true";
-          if (isRestore) {
-            setupRestoreState(result.data.combatants);
-          } else {
-            setupInitialState(result.data.combatants);
-          }
+          setupInitialState(result.data.combatants);
         }
       } catch (e) { console.error(e); }
       setLoading(false);
@@ -116,55 +74,17 @@ function CalculatorLogic() {
                 isConverted: false,
             })),
             faintMemory: 0,
+            counters: { duplication: 0, removal: 0 },
             historyLog: []
         }));
         setActiveTeam(initialTeamState);
-        setGlobalCounters({ duplication: 0, removal: 0 });
-        setHistoryStack([]);
-    };
-
-    const setupRestoreState = (combatantData) => {
-        const restorePlayers = JSON.parse(sessionStorage.getItem('restorePlayers') || '[]');
-        const restoreCounters = JSON.parse(sessionStorage.getItem('restoreCounters') || '{"duplication":0,"removal":0}');
-        const newCombatantId = sessionStorage.getItem('newCombatantId');
-
-        // Clear session storage
-        sessionStorage.removeItem('restorePlayers');
-        sessionStorage.removeItem('restoreCounters');
-        sessionStorage.removeItem('newCombatantId');
-
-        // Find new combatant
-        const newCombatant = combatantData.find(c => c.id.toString() === newCombatantId);
-        if (!newCombatant) {
-            setupInitialState(combatantData);
-            return;
-        }
-
-        // Create fresh state for new combatant
-        const newPlayerState = {
-            id: newCombatant.id,
-            info: newCombatant,
-            liveCards: newCombatant.cards.map((card, index) => ({
-                ...card,
-                uniqueId: `${newCombatant.id}_start_${index}`,
-                currentTier: "Normal",
-                isStarting: true,
-                isCopy: false,
-                isConverted: false,
-            })),
-            faintMemory: 0,
-            historyLog: []
-        };
-
-        // Combine restored players with new combatant
-        setActiveTeam([...restorePlayers, newPlayerState]);
-        setGlobalCounters(restoreCounters);
-        setHistoryStack([]);
+        setHistoryStacks({});
     };
     
     initData();
   }, []);
 
+  // --- FUNGSI HELPER ---
   const getRule = (key, defaultVal) => rules[key] !== undefined ? rules[key] : defaultVal;
   
   const getScalingCost = (count) => {
@@ -197,15 +117,25 @@ function CalculatorLogic() {
   };
 
   const getCardRemoveBase = (card) => {
-      if (card.isStarting || card.isConverted) {
+      if (card.isStarting && !card.isConverted) {
           return 20;
-      } else {
+      } 
+      else {
           return getCardBaseValue(card.type) * -1;
       }
   };
 
-  const applyStateChange = (newTeamState, newGlobalCounters, logInfo) => {
-      setHistoryStack(prev => [...prev, { activeTeam, globalCounters }]);
+  // --- STATE MANAGEMENT (UNDO PERSONAL) ---
+  const applyStateChange = (newTeamState, logInfo) => {
+      if (logInfo.ownerId) {
+          setHistoryStacks(prev => ({
+              ...prev,
+              [logInfo.ownerId]: [
+                  ...(prev[logInfo.ownerId] || []),
+                  activeTeam.find(p => p.id === logInfo.ownerId)
+              ]
+          }));
+      }
       
       if (logInfo.ownerId && logInfo.message) {
           newTeamState = newTeamState.map(player => {
@@ -215,10 +145,10 @@ function CalculatorLogic() {
               return player;
           });
       }
-
       setActiveTeam(newTeamState);
-      setGlobalCounters(newGlobalCounters);
   };
+
+  // --- ACTIONS ---
 
   const handleTierChange = (newTier) => {
     if (!modalData) return;
@@ -233,56 +163,45 @@ function CalculatorLogic() {
             const updatedCards = player.liveCards.map(c => 
                 c.uniqueId === card.uniqueId ? { ...c, currentTier: newTier } : c
             );
-            return {
-                ...player,
-                liveCards: updatedCards,
-                faintMemory: player.faintMemory + costDiff
-            };
+            return { ...player, liveCards: updatedCards, faintMemory: player.faintMemory + costDiff };
         }
         return player;
     });
     
-    applyStateChange(
-        newTeamState, 
-        globalCounters,
-        { ownerId, message: `Upgrade: ${card.name} (${card.currentTier} -> ${newTier}): +${costDiff} Pts` }
-    );
+    applyStateChange(newTeamState, { ownerId, message: `Upgrade: ${card.name} (${card.currentTier} -> ${newTier}): +${costDiff} Pts` });
     setModalData(null);
   };
 
   const handleCopy = () => {
     if (!modalData) return;
     const { card, ownerId } = modalData;
+
+    const player = activeTeam.find(p => p.id === ownerId);
+    const currentCount = player.counters.duplication;
     
-    const currentCount = globalCounters.duplication;
     const actionCost = getScalingCost(currentCount);
     const baseValue = getCardBaseValue(card.type);
     const statusValue = getCardStatusValue(card);
     const totalCost = actionCost + baseValue + statusValue;
 
-    const newGlobalCounters = { ...globalCounters, duplication: currentCount + 1 };
-
-    const newTeamState = activeTeam.map(player => {
-        if (player.id === ownerId) {
+    const newTeamState = activeTeam.map(p => {
+        if (p.id === ownerId) {
             const newCard = {
                 ...card,
                 uniqueId: `${ownerId}_copy_${Date.now()}`,
                 isCopy: true, isStarting: false, isConverted: false 
             };
             return {
-                ...player,
-                liveCards: [...player.liveCards, newCard],
-                faintMemory: player.faintMemory + totalCost
+                ...p,
+                liveCards: [...p.liveCards, newCard],
+                faintMemory: p.faintMemory + totalCost,
+                counters: { ...p.counters, duplication: currentCount + 1 }
             };
         }
-        return player;
+        return p;
     });
 
-    applyStateChange(
-        newTeamState,
-        newGlobalCounters,
-        { ownerId, message: `Copy: ${card.name} (Cost Copy: +${actionCost}, Base Card: +${baseValue + statusValue}) = +${totalCost} Pts` }
-    );
+    applyStateChange(newTeamState, { ownerId, message: `Copy: ${card.name} (Cost Copy: +${actionCost}, Base Card: +${baseValue + statusValue}) = +${totalCost} Pts` });
     setModalData(null);
   };
 
@@ -290,32 +209,41 @@ function CalculatorLogic() {
     if (!modalData) return;
     const { card, ownerId } = modalData;
 
-    const currentCount = globalCounters.removal;
+    const player = activeTeam.find(p => p.id === ownerId);
+    const currentCount = player.counters.removal;
+
     const actionCost = getScalingCost(currentCount);
     const removeBase = getCardRemoveBase(card);
     const statusRefund = getCardStatusValue(card);
+    
     const totalPointChange = actionCost + removeBase - statusRefund;
 
-    const newGlobalCounters = { ...globalCounters, removal: currentCount + 1 };
-
-    const newTeamState = activeTeam.map(player => {
-        if (player.id === ownerId) {
-            const updatedCards = player.liveCards.filter(c => c.uniqueId !== card.uniqueId);
-            return {
-                ...player,
-                liveCards: updatedCards,
-                faintMemory: player.faintMemory + totalPointChange
-            };
-        }
-        return player;
-    });
-    
-    applyStateChange(
-        newTeamState,
-        newGlobalCounters,
-        { ownerId, message: `Remove: ${card.name} (Cost Remove: +${actionCost}, Base Card: ${removeBase}, Status Refund: -${statusRefund}) = ${totalPointChange} Pts` }
-    );
+    // Tutup modal terlebih dahulu, tapi simpan data untuk animasi
+    setDeletingCard({ card, ownerId, isBurning: false });
     setModalData(null);
+    
+    // Mulai animasi burn setelah modal tertutup
+    setTimeout(() => {
+        setDeletingCard(prev => prev ? { ...prev, isBurning: true } : null);
+    }, 50);
+    
+    setTimeout(() => {
+        const newTeamState = activeTeam.map(p => {
+            if (p.id === ownerId) {
+                const updatedCards = p.liveCards.filter(c => c.uniqueId !== card.uniqueId);
+                return {
+                    ...p,
+                    liveCards: updatedCards,
+                    faintMemory: p.faintMemory + totalPointChange,
+                    counters: { ...p.counters, removal: currentCount + 1 }
+                };
+            }
+            return p;
+        });
+        
+        applyStateChange(newTeamState, { ownerId, message: `Remove: ${card.name} (Cost Remove: +${actionCost}, Base Card: ${removeBase}, Status Refund: -${statusRefund}) = ${totalPointChange} Pts` });
+        setDeletingCard(null);
+    }, 800);
   };
 
   const handleExecuteConvert = (targetCard) => {
@@ -327,28 +255,20 @@ function CalculatorLogic() {
     const oldStatusRefund = getCardStatusValue(sourceCard);
     const totalPointChange = (actionCost + newCardValue) - oldStatusRefund;
 
-    const newTeamState = activeTeam.map(player => {
-        if (player.id === ownerId) {
-            const updatedCards = player.liveCards.map(c => {
+    const newTeamState = activeTeam.map(p => {
+        if (p.id === ownerId) {
+            const updatedCards = p.liveCards.map(c => {
                 if (c.uniqueId === sourceCard.uniqueId) {
                     return { ...c, name: targetCard.name, type: targetCard.type, imageUrl: targetCard.imageUrl, description: targetCard.description, currentTier: 'Normal', isConverted: true };
                 }
                 return c;
             });
-            return {
-                ...player,
-                liveCards: updatedCards,
-                faintMemory: player.faintMemory + totalPointChange
-            };
+            return { ...p, liveCards: updatedCards, faintMemory: p.faintMemory + totalPointChange };
         }
-        return player;
+        return p;
     });
 
-    applyStateChange(
-        newTeamState,
-        globalCounters,
-        { ownerId, message: `Convert (${sourceCard.name} -> ${targetCard.name}): +${totalPointChange} Pts` }
-    );
+    applyStateChange(newTeamState, { ownerId, message: `Convert (${sourceCard.name} -> ${targetCard.name}): +${totalPointChange} Pts` });
     setConvertSelector(null);
   };
 
@@ -356,226 +276,182 @@ function CalculatorLogic() {
       if(!addCardModal) return;
       const { ownerId } = addCardModal;
       
-      const cardCost = getCardBaseValue(targetCard.type);
+      const cardCost = getCardBaseValue(targetCard.type); 
 
-      const newTeamState = activeTeam.map(player => {
-          if (player.id === ownerId) {
+      const newTeamState = activeTeam.map(p => {
+          if (p.id === ownerId) {
               const newCard = {
                   ...targetCard,
                   uniqueId: `${ownerId}_add_${Date.now()}`,
                   currentTier: 'Normal', isStarting: false, isCopy: false, isConverted: false
               };
               return {
-                  ...player,
-                  liveCards: [...player.liveCards, newCard],
-                  faintMemory: player.faintMemory + cardCost
+                  ...p,
+                  liveCards: [...p.liveCards, newCard],
+                  faintMemory: p.faintMemory + cardCost
+              };
+          }
+          return p;
+      });
+
+      applyStateChange(newTeamState, { ownerId, message: `Add: ${targetCard.name} (Base Card: +${cardCost})` });
+      setAddCardModal(null);
+  };
+
+  // --- UI FUNCTIONS ---
+  const handleResetPlayer = (playerId) => {
+      if (!confirm("Reset kalkulasi combatan ini?")) return;
+      const selectedCombatants = initialDataCache.combatants.filter((c) => c.id === playerId);
+      
+      const newTeamState = activeTeam.map(player => {
+          if (player.id === playerId) {
+              const char = selectedCombatants[0];
+              return {
+                  id: char.id,
+                  info: char,
+                  liveCards: char.cards.map((card, index) => ({
+                      ...card,
+                      uniqueId: `${char.id}_start_${index}`,
+                      currentTier: "Normal",
+                      isStarting: true,
+                      isCopy: false,
+                      isConverted: false,
+                  })),
+                  faintMemory: 0,
+                  counters: { duplication: 0, removal: 0 },
+                  historyLog: []
               };
           }
           return player;
       });
-
-      applyStateChange(
-          newTeamState,
-          globalCounters,
-          { ownerId, message: `Add: ${targetCard.name} (Base Card: +${cardCost})` }
-      );
-      setAddCardModal(null);
-  };
-
-  const handleResetAll = () => {
-      if (!confirm("Reset semua kalkulasi ke awal?")) return;
       
-      const selectedCombatants = initialDataCache.combatants.filter((c) => 
-          teamIds.includes(c.id.toString())
-      );
-      const initialTeamState = selectedCombatants.map((char) => ({
-          id: char.id,
-          info: char,
-          liveCards: char.cards.map((card, index) => ({
-              ...card, uniqueId: `${char.id}_start_${index}`, currentTier: "Normal",
-              isStarting: true, isCopy: false, isConverted: false,
-          })),
-          faintMemory: 0,
-          historyLog: []
-      }));
-      
-      setActiveTeam(initialTeamState);
-      setGlobalCounters({ duplication: 0, removal: 0 });
-      setHistoryStack([]);
+      setActiveTeam(newTeamState);
+      setHistoryStacks(prev => ({...prev, [playerId]: []}));
   };
 
   const handleUndoPlayer = (playerId) => {
-      if (historyStack.length === 0) {
+      const playerHistory = historyStacks[playerId] || [];
+      if (playerHistory.length === 0) {
           alert("Tidak ada aksi untuk di-undo.");
           return;
       }
       
-      const lastState = historyStack[historyStack.length - 1];
-      setActiveTeam(lastState.activeTeam);
-      setGlobalCounters(lastState.globalCounters);
-      setHistoryStack(prev => prev.slice(0, -1));
-  };
-
-  const handleResetPlayer = (playerId) => {
-      if (!confirm(`Reset ${activeTeam.find(p => p.id === playerId)?.info.name}?`)) return;
+      const previousPlayerState = playerHistory[playerHistory.length - 1];
+      const newTeamState = activeTeam.map(p => p.id === playerId ? previousPlayerState : p);
       
-      const originalCombatant = initialDataCache.combatants.find(c => c.id === playerId);
-      if (!originalCombatant) return;
-
-      const resetPlayerState = {
-          id: originalCombatant.id,
-          info: originalCombatant,
-          liveCards: originalCombatant.cards.map((card, index) => ({
-              ...card,
-              uniqueId: `${originalCombatant.id}_start_${index}`,
-              currentTier: "Normal",
-              isStarting: true,
-              isCopy: false,
-              isConverted: false,
-          })),
-          faintMemory: 0,
-          historyLog: []
-      };
-
-      const newTeamState = activeTeam.map(player => 
-          player.id === playerId ? resetPlayerState : player
-      );
-
-      setHistoryStack(prev => [...prev, { activeTeam, globalCounters }]);
       setActiveTeam(newTeamState);
+      setHistoryStacks(prev => ({
+          ...prev,
+          [playerId]: playerHistory.slice(0, -1)
+      }));
   };
 
-  const handleChangeCombatant = (playerId) => {
-      // Simpan state combatant lain ke sessionStorage
-      const otherPlayers = activeTeam.filter(p => p.id !== playerId);
-      sessionStorage.setItem('savedPlayers', JSON.stringify(otherPlayers));
-      sessionStorage.setItem('savedCounters', JSON.stringify(globalCounters));
-      sessionStorage.setItem('replacingPlayerId', playerId.toString());
-      
-      // Redirect ke home untuk pilih combatant baru
-      router.push('/');
+  // Fungsi untuk sort kartu (Basic dulu, baru Unique)
+  const getSortedCards = (cards) => {
+      const typeOrder = { 'Basic': 0, 'Unique': 1, 'Neutral': 2, 'Monster': 3, 'Forbidden': 4 };
+      return [...cards].sort((a, b) => {
+          const typeA = typeOrder[a.type] ?? 999;
+          const typeB = typeOrder[b.type] ?? 999;
+          return typeA - typeB;
+      });
   };
 
   if (loading) return <div className="bg-slate-900 min-h-screen text-white p-10">Loading System...</div>;
 
   return (
-    <main className="min-h-screen bg-slate-900 text-white p-4 md:p-8 font-sans relative">
-      
-      {/* HEADER GLOBAL */}
+    <main className="min-h-screen bg-slate-900 text-white p-4 md:p-8 font-sans relative pb-20">
+      {/* Header */}
       <header className="mb-4 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-800 p-4 rounded-lg border border-slate-700 shadow-lg">
         <div className="flex items-center gap-4">
             <div>
                 <h1 className="text-2xl font-bold text-cyan-400">Chaos Zero Nightmare</h1>
-                <p className="text-xs text-slate-400">Calculator (Logic v4.2)</p>
+                <p className="text-xs text-slate-400">Calculator (Personal Counters)</p>
             </div>
             <div className="flex items-center gap-2 bg-black/30 px-3 py-1 rounded border border-slate-600">
                 <label className="text-sm font-bold text-yellow-400">Tier:</label>
-                <select 
-                    value={chaosTier} 
-                    onChange={(e) => setChaosTier(parseInt(e.target.value))}
-                    className="bg-slate-700 text-white text-sm rounded p-1 outline-none border border-slate-500"
-                >
+                <select value={chaosTier} onChange={(e) => setChaosTier(parseInt(e.target.value))} className="bg-slate-700 text-white text-sm rounded p-1 outline-none border border-slate-500">
                     {[...Array(15)].map((_, i) => (<option key={i} value={i + 1}>Tier {i + 1}</option>))}
                 </select>
             </div>
         </div>
-        <div className="flex gap-4 text-center bg-black/20 p-2 rounded-md border border-slate-700">
-             <div>
-                <div className="text-xs text-slate-500">Global Copy</div>
-                <div className="text-lg font-bold text-white">{globalCounters.duplication}</div>
-             </div>
-             <div>
-                <div className="text-xs text-slate-500">Global Remove</div>
-                <div className="text-lg font-bold text-white">{globalCounters.removal}</div>
-             </div>
-             <div className="border-l border-slate-600 pl-4">
-                <div className="text-xs text-slate-500">Max Cap</div>
-                <div className="text-lg font-bold text-white">{getCurrentCap()} Pts</div>
-             </div>
+        <div className="bg-black/20 p-2 rounded-md border border-slate-700">
+            <div className="text-xs text-slate-500">Max Cap</div>
+            <div className="text-lg font-bold text-white text-right">{getCurrentCap()} Pts</div>
         </div>
       </header>
 
-      {/* FLOATING ACTION BUTTON (FAB) */}
-      <FloatingActionMenu onResetAll={handleResetAll} />
+      {/* Toolbar */}
+      <div className="mb-8 flex flex-wrap gap-3 items-center">
+          <Link href="/" className="px-4 py-2 bg-slate-600 text-white text-sm font-bold rounded shadow hover:bg-slate-500">⟲ Change Team</Link>
+      </div>
 
-      {/* Arena Grid */}
+      {/* Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {activeTeam.map((player) => (
             <div key={player.id} className="bg-slate-800/40 border border-slate-600 rounded-xl overflow-hidden flex flex-col h-full shadow-xl">
-                {/* Player Header - STICKY dengan backdrop */}
-                <div className="sticky top-0 z-40 bg-slate-800/95 backdrop-blur-md border-b border-slate-600 shadow-lg">
-                    {/* Info Combatant */}
-                    <div className="p-4 flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                            <div className="w-12 h-12 rounded-full bg-black flex items-center justify-center border-2 border-cyan-500 overflow-hidden shadow-lg">
-                                {player.info.imageUrl ? (<img src={player.info.imageUrl} alt={player.info.name} className="w-full h-full object-cover" />) : <span className="text-[9px]">IMG</span>}
-                            </div>
-                            <h2 className="font-bold">{player.info.name}</h2>
+                {/* Player Header dengan Personal Controls */}
+                <div className="bg-slate-800 p-4 flex items-center justify-between border-b border-slate-600">
+                    <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-full bg-black flex items-center justify-center border-2 border-cyan-500 overflow-hidden shadow-lg">
+                            {player.info.imageUrl ? (<img src={player.info.imageUrl} alt={player.info.name} className="w-full h-full object-cover" />) : <span className="text-[9px]">IMG</span>}
                         </div>
-                        <div className="text-right">
-                            <span className={`block text-2xl font-bold ${player.faintMemory > getCurrentCap() ? 'text-red-500 animate-pulse' : 'text-green-400'}`}>
-                                {player.faintMemory}
-                            </span>
-                            <span className="text-[8px] uppercase tracking-widest text-slate-500">/ {getCurrentCap()} Max</span>
+                        <div>
+                            <h2 className="font-bold">{player.info.name}</h2>
+                            <div className="flex gap-2 text-[9px] text-slate-400">
+                                <span>D: {player.counters.duplication}</span>
+                                <span>R: {player.counters.removal}</span>
+                            </div>
                         </div>
                     </div>
-
-                    {/* Tombol Actions per Combatant */}
-                    <div className="px-4 pb-3 flex gap-2">
-                        <button
-                            onClick={() => handleUndoPlayer(player.id)}
-                            disabled={historyStack.length === 0}
-                            className="flex-1 px-3 py-1.5 bg-yellow-600 text-black text-xs font-bold rounded shadow hover:bg-yellow-500 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
-                        >
-                            ↶ Undo
-                        </button>
-                        <button
-                            onClick={() => handleResetPlayer(player.id)}
-                            className="flex-1 px-3 py-1.5 bg-orange-600 text-white text-xs font-bold rounded shadow hover:bg-orange-500 transition-all"
-                        >
-                            ↻ Reset
-                        </button>
-                        <button
-                            onClick={() => handleChangeCombatant(player.id)}
-                            className="flex-1 px-3 py-1.5 bg-purple-600 text-white text-xs font-bold rounded shadow hover:bg-purple-500 transition-all"
-                        >
-                            🔄 Change
-                        </button>
+                    <div className="text-right">
+                        <span className={`block text-2xl font-bold ${player.faintMemory > getCurrentCap() ? 'text-red-500 animate-pulse' : 'text-green-400'}`}>{player.faintMemory}</span>
+                        <span className="text-[8px] uppercase tracking-widest text-slate-500">/ {getCurrentCap()} Max</span>
                     </div>
                 </div>
 
-                {/* Card Area */}
+                {/* Player Controls (Personal Undo & Reset) */}
+                <div className="flex gap-2 px-4 py-2 bg-slate-750 border-b border-slate-700">
+                    <button onClick={() => handleUndoPlayer(player.id)} disabled={(historyStacks[player.id] || []).length === 0} className="flex-1 px-2 py-1 bg-yellow-600 text-black text-xs font-bold rounded shadow hover:bg-yellow-500 disabled:opacity-30 disabled:cursor-not-allowed">↶ Undo</button>
+                    <button onClick={() => handleResetPlayer(player.id)} className="flex-1 px-2 py-1 bg-red-700 text-white text-xs font-bold rounded shadow hover:bg-red-600">↻ Reset</button>
+                </div>
+
                 <div className="flex-1 p-4 bg-black/20 overflow-y-auto min-h-[400px]">
                     <div className="grid grid-cols-2 gap-3">
-                        {player.liveCards.map((card) => (
-                            <div 
-                                key={card.uniqueId} 
-                                onClick={() => setModalData({ card, ownerId: player.id })}
-                                className={`relative group cursor-pointer rounded-lg overflow-hidden border-2 transition-all hover:scale-[1.02] hover:shadow-xl aspect-[2/3]
-                                    ${card.isConverted ? 'border-yellow-500' : ''}
-                                    ${!card.isConverted && card.type === 'Basic' ? 'border-cyan-500' : ''}
-                                    ${!card.isConverted && card.type === 'Unique' ? 'border-indigo-500' : ''}
-                                    ${!card.isConverted && card.type === 'Neutral' ? 'border-slate-400' : ''}
-                                    ${!card.isConverted && card.type === 'Monster' ? 'border-red-600' : ''}
-                                `}
-                            >
-                                {card.imageUrl ? (<img src={card.imageUrl} alt={card.name} className="absolute inset-0 w-full h-full object-cover z-0" />) : (<div className="absolute inset-0 bg-slate-800 flex items-center justify-center text-xs text-slate-500">No IMG</div>)}
-                                <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/40 to-transparent z-10"></div>
-                                <div className="absolute inset-0 z-20 flex flex-col justify-between p-2 text-white">
-                                    <div className="flex justify-between items-start">
-                                        <div className="w-6 h-6 flex items-center justify-center bg-black/70 border border-white/50 rounded-full text-sm font-bold text-white shadow-lg">
-                                            {card.cost}
+                        {getSortedCards(player.liveCards).map((card) => (
+                            <div key={card.uniqueId} className="relative">
+                                {/* Main Card */}
+                                <div 
+                                    onClick={() => setModalData({ card, ownerId: player.id })}
+                                    className={`relative group cursor-pointer rounded-lg overflow-hidden border-2 transition-all hover:scale-[1.02] hover:shadow-xl aspect-[2/3]
+                                        ${deletingCard && deletingCard.card.uniqueId === card.uniqueId ? 'opacity-100 scale-100' : 'opacity-100 scale-100'}
+                                        ${card.isConverted ? 'border-yellow-500' : ''}
+                                        ${!card.isConverted && card.type === 'Basic' ? 'border-cyan-500' : ''}
+                                        ${!card.isConverted && card.type === 'Unique' ? 'border-indigo-500' : ''}
+                                        ${!card.isConverted && card.type === 'Neutral' ? 'border-slate-400' : ''}
+                                        ${!card.isConverted && card.type === 'Monster' ? 'border-red-600' : ''}
+                                    `}
+                                >
+                                    {card.imageUrl ? (<img src={card.imageUrl} alt={card.name} className="absolute inset-0 w-full h-full object-cover z-0" />) : (<div className="absolute inset-0 bg-slate-800 flex items-center justify-center text-xs text-slate-500">No IMG</div>)}
+                                    <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/40 to-transparent z-10"></div>
+                                    <div className="absolute inset-0 z-20 flex flex-col justify-between p-2 text-white">
+                                        <div className="flex justify-between items-start">
+                                            <div className="w-6 h-6 flex items-center justify-center bg-black/70 border border-white/50 rounded-full text-sm font-bold text-white shadow-lg">{card.cost}</div>
+                                            {card.currentTier !== 'Normal' && (<span className="text-[8px] font-bold uppercase bg-yellow-400 text-black px-1 rounded shadow-md">{card.currentTier}</span>)}
                                         </div>
-                                        {card.currentTier !== 'Normal' && (<span className="text-[8px] font-bold uppercase bg-yellow-400 text-black px-1 rounded shadow-md">{card.currentTier}</span>)}
-                                    </div>
-                                    <div>
-                                        <span className={`text-[8px] font-bold uppercase px-1 rounded shadow-md ${card.isConverted ? 'bg-yellow-500 text-black' : 'bg-slate-200 text-black'}`}>{card.isConverted ? 'CONVERTED' : card.type}</span>
-                                        <div className="font-bold text-sm leading-tight mb-1 mt-1 drop-shadow-md">{card.name}</div>
-                                        <p className="text-[9px] text-slate-200 line-clamp-2 leading-tight font-light opacity-90 drop-shadow-sm">
-                                            {card.description || "-"}
-                                        </p>
+                                        <div className="mt-auto">
+                                            <span className={`text-[8px] font-bold uppercase px-1 rounded shadow-md mb-1 inline-block ${card.isConverted ? 'bg-yellow-500 text-black' : 'bg-slate-200 text-black'}`}>{card.isConverted ? 'CONVERTED' : card.type}</span>
+                                            <div className="font-bold text-sm leading-none mb-1 drop-shadow-md text-white">{card.name}</div>
+                                            <p className="text-[9px] text-slate-200 line-clamp-2 leading-tight font-light opacity-90 drop-shadow-sm">{card.description || "-"}</p>
+                                        </div>
                                     </div>
                                 </div>
+
+                                {/* Copy Badge/Indicator */}
+                                {card.isCopy && (
+                                    <div className="absolute -top-1 -right-1 z-30 w-8 h-8 bg-cyan-500 rounded-full flex items-center justify-center border-2 border-white shadow-lg text-xs font-bold text-black">
+                                        ⓓ
+                                    </div>
+                                )}
                             </div>
                         ))}
                         <button onClick={() => setAddCardModal({ ownerId: player.id })} className="aspect-[2/3] rounded-lg border-2 border-dashed border-slate-600 flex flex-col items-center justify-center text-slate-500 hover:bg-slate-800 hover:border-slate-400 hover:text-white transition-all">
@@ -584,8 +460,6 @@ function CalculatorLogic() {
                         </button>
                     </div>
                 </div>
-
-                {/* Log Footer */}
                 <div className="p-2 bg-slate-950 text-[10px] text-slate-400 h-24 overflow-y-auto border-t border-slate-700 font-mono">
                     {player.historyLog.map((log, i) => (<div key={i} className="mb-1 border-b border-slate-800 pb-1 border-dashed">&gt; {log}</div>))}
                 </div>
@@ -609,47 +483,24 @@ function CalculatorLogic() {
                          <div className="flex-1">
                              <h4 className="font-bold text-lg">{modalData.card.name}</h4>
                              <p className="text-xs text-slate-400 mb-3">{modalData.card.description}</p>
-                             
                              <div className="flex gap-2">
-                                <button 
-                                    onClick={() => handleTierChange('Epiphany')} 
-                                    disabled={modalData.card.currentTier !== 'Normal'} 
-                                    className="flex-1 py-1 bg-yellow-600 hover:bg-yellow-500 disabled:opacity-30 rounded text-[10px] font-bold"
-                                >
-                                    Epiphany
-                                </button>
-                                <button 
-                                    onClick={() => handleTierChange('Divine')} 
-                                    disabled={modalData.card.currentTier === 'Divine'} 
-                                    className="flex-1 py-1 bg-orange-600 hover:bg-orange-500 disabled:opacity-30 rounded text-[10px] font-bold"
-                                >
-                                    Divine (+20)
-                                </button>
+                                <button onClick={() => handleTierChange('Epiphany')} disabled={modalData.card.currentTier !== 'Normal'} className="flex-1 py-1 bg-yellow-600 hover:bg-yellow-500 disabled:opacity-30 rounded text-[10px] font-bold">Epiphany</button>
+                                <button onClick={() => handleTierChange('Divine')} disabled={modalData.card.currentTier === 'Divine'} className="flex-1 py-1 bg-orange-600 hover:bg-orange-500 disabled:opacity-30 rounded text-[10px] font-bold">Divine (+20)</button>
                              </div>
                          </div>
                     </div>
                     <div className="grid grid-cols-3 gap-3">
-                        <button 
-                            onClick={handleCopy} 
-                            className="py-3 bg-blue-700 hover:bg-blue-600 rounded text-sm font-bold flex flex-col items-center gap-1"
-                        >
+                        <button onClick={handleCopy} className="py-3 bg-blue-700 hover:bg-blue-600 rounded text-sm font-bold flex flex-col items-center gap-1">
                             <span>Copy</span>
-                            <span className="text-[9px] opacity-80">Cost: +{getScalingCost(globalCounters.duplication)}</span>
+                            <span className="text-[9px] opacity-80">Cost: +{getScalingCost(activeTeam.find(c => c.id === modalData.ownerId).counters.duplication) + getCardBaseValue(modalData.card.type) + getCardStatusValue(modalData.card)}</span>
                         </button>
-                        <button 
-                            onClick={handleRemove} 
-                            className="py-3 bg-red-700 hover:bg-red-600 rounded text-sm font-bold flex flex-col items-center gap-1"
-                        >
+                        <button onClick={handleRemove} className="py-3 bg-red-700 hover:bg-red-600 rounded text-sm font-bold flex flex-col items-center gap-1">
                             <span>Remove</span>
-                            <span className="text-[9px] opacity-80">Cost: +{getScalingCost(globalCounters.removal)}</span>
+                            <span className="text-[9px] opacity-80">Cost: {getScalingCost(activeTeam.find(c => c.id === modalData.ownerId).counters.removal) + getCardRemoveBase(modalData.card) - getCardStatusValue(modalData.card)}</span>
                         </button>
-                        <button 
-                            onClick={() => { setConvertSelector({ sourceCard: modalData.card, ownerId: modalData.ownerId }); setModalData(null); }} 
-                            disabled={!modalData.card.isStarting || modalData.card.isConverted} 
-                            className="py-3 bg-purple-700 hover:bg-purple-600 disabled:opacity-30 rounded text-sm font-bold flex flex-col items-center gap-1"
-                        >
+                        <button onClick={() => { setConvertSelector({ sourceCard: modalData.card, ownerId: modalData.ownerId }); setModalData(null); }} disabled={!modalData.card.isStarting || modalData.card.isConverted} className="py-3 bg-purple-700 hover:bg-purple-600 disabled:opacity-30 rounded text-sm font-bold flex flex-col items-center gap-1">
                             <span>Convert</span>
-                            <span className="text-[9px] opacity-80">Cost: +{getRule('action_convert', 10)}</span>
+                            <span className="text-[9px] opacity-80">Cost: +{getRule('action_convert', 10) + getRule('cost_neutral', 20) - getCardStatusValue(modalData.card)}</span>
                         </button>
                     </div>
                 </div>
@@ -657,31 +508,108 @@ function CalculatorLogic() {
         </div>
       )}
 
-      {/* MODAL: SELECT CARD */}
+      {/* ANIMASI BURN CARD - Overlay saat menghapus */}
+      {deletingCard && deletingCard.isBurning && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none">
+          <style>{`
+            @keyframes burn-and-disappear {
+              0% {
+                opacity: 1;
+                transform: scale(1) rotate(0deg);
+                filter: brightness(1);
+              }
+              30% {
+                filter: brightness(1.5) saturate(1.5) hue-rotate(30deg);
+              }
+              60% {
+                opacity: 0.5;
+                filter: brightness(2) saturate(2) hue-rotate(60deg);
+                transform: scale(0.95) rotate(5deg);
+              }
+              85% {
+                opacity: 0.2;
+                filter: brightness(3) saturate(0) blur(10px);
+                transform: scale(0.7) rotate(-10deg) translateY(-20px);
+              }
+              100% {
+                opacity: 0;
+                filter: brightness(0) blur(20px);
+                transform: scale(0) rotate(360deg) translateY(-100px);
+              }
+            }
+            
+            @keyframes burn-particles {
+              0% {
+                opacity: 1;
+                transform: translate(0, 0) scale(1);
+              }
+              100% {
+                opacity: 0;
+                transform: translate(var(--tx), var(--ty)) scale(0);
+              }
+            }
+            
+            .burn-card {
+              animation: burn-and-disappear 0.75s ease-in forwards;
+            }
+            
+            .burn-particle {
+              position: absolute;
+              animation: burn-particles 0.75s ease-out forwards;
+            }
+          `}</style>
+          
+          <div className="relative w-48 h-72">
+            <div className="burn-card absolute inset-0 rounded-lg overflow-hidden border-2 border-orange-500">
+              {deletingCard.card.imageUrl && (
+                <img src={deletingCard.card.imageUrl} className="w-full h-full object-cover" />
+              )}
+              <div className="absolute inset-0 bg-gradient-to-t from-orange-600/80 via-orange-500/40 to-transparent"></div>
+            </div>
+            
+            {/* Particle effects */}
+            {[...Array(12)].map((_, i) => {
+              const angle = (i / 12) * Math.PI * 2;
+              const distance = 150;
+              const tx = Math.cos(angle) * distance;
+              const ty = Math.sin(angle) * distance;
+              return (
+                <div
+                  key={i}
+                  className="burn-particle w-3 h-3 bg-orange-400 rounded-full"
+                  style={{
+                    '--tx': `${tx}px`,
+                    '--ty': `${ty}px`,
+                    left: '50%',
+                    top: '50%',
+                    marginLeft: '-6px',
+                    marginTop: '-6px',
+                    boxShadow: '0 0 10px rgba(255, 140, 0, 0.8)'
+                  }}
+                />
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL SELECTOR */}
       {(addCardModal || convertSelector) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md p-4" onClick={() => { setAddCardModal(null); setConvertSelector(null); }}>
             <div className="bg-slate-900 border border-slate-600 rounded-xl shadow-2xl w-full max-w-4xl h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
                 <div className="p-4 border-b border-slate-700 bg-slate-800 rounded-t-xl flex justify-between items-center">
-                    <div><h3 className="font-bold text-xl text-white">{addCardModal ? "Select Card to Add" : "Select Conversion Target"}</h3></div>
+                    <div><h3 className="font-bold text-xl text-white">{addCardModal ? "Select Card" : "Select Conversion"}</h3></div>
                     <button onClick={() => { setAddCardModal(null); setConvertSelector(null); }} className="text-2xl text-slate-400 hover:text-white">✕</button>
                 </div>
                 <div className="flex-1 overflow-y-auto p-6 bg-black/20">
                     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
                         {miscCards.map((card) => (
-                            <div 
-                                key={card.id}
-                                onClick={() => {
-                                    if (addCardModal) handleManualAdd(card);
-                                    if (convertSelector) handleExecuteConvert(card);
-                                }}
-                                className={`relative cursor-pointer rounded-lg overflow-hidden border-2 border-slate-700 hover:border-cyan-500 hover:scale-105 transition-all aspect-[2/3] group`}
-                            >
+                            <div key={card.id} onClick={() => { if (addCardModal) handleManualAdd(card); if (convertSelector) handleExecuteConvert(card); }} className="relative cursor-pointer rounded-lg overflow-hidden border-2 border-slate-700 hover:border-cyan-500 hover:scale-105 transition-all aspect-[2/3] group">
                                 {card.imageUrl ? <img src={card.imageUrl} className="absolute inset-0 w-full h-full object-cover"/> : <div className="absolute inset-0 bg-slate-800"></div>}
                                 <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent"></div>
                                 <div className="absolute bottom-0 left-0 p-3 w-full">
                                     <span className={`text-[9px] font-bold px-1 rounded ${card.type==='Monster'?'bg-red-600':'bg-slate-200 text-black'}`}>{card.type}</span>
                                     <div className="font-bold text-sm text-white mt-1 leading-tight">{card.name}</div>
-                                    <div className="text-[9px] text-slate-400 line-clamp-2">{card.description}</div>
                                 </div>
                                 <div className="absolute inset-0 bg-cyan-500/30 hidden group-hover:flex items-center justify-center font-bold text-white">SELECT</div>
                             </div>
