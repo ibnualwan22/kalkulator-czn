@@ -7,13 +7,16 @@ const inter = Inter({ subsets: ["latin"] });
 export const metadata = {
   title: "Chaos Zero Nightmare Calculator",
   description: "Calculate Faint Memory for your Chaos Zero Nightmare team.",
-  manifest: "/manifest.json", // <--- TAMBAHKAN INI
-  themeColor: "#0f172a",      // <--- TAMBAHKAN INI (Warna bar atas HP)
-  viewport: {
-    width: "device-width",
-    initialScale: 1,
-    maximumScale: 1, // Mencegah zoom cubit agar terasa seperti app asli
-  },
+  manifest: "/manifest.json",
+};
+
+// 2. Viewport & Theme Color (Dipisah ke sini agar tidak warning)
+export const viewport = {
+  themeColor: "#0f172a",
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false, // Mencegah zoom cubit (biar rasa app native)
 };
 
 export default function RootLayout({ children }) {
