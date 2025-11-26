@@ -60,8 +60,13 @@ export default function Home() {
       <div className="max-w-7xl mx-auto mb-8">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
             <div>
-                <h1 className="text-3xl font-bold text-cyan-400">
-                    Chaos Zero Nightmare <span className="text-white text-lg">Calculator</span>
+                <h1 className="flex flex-col items-start gap-0 leading-none">
+                    <span className="text-4xl font-black tracking-tight text-white uppercase">CHAOS</span>
+                    <span className="text-4xl font-black tracking-tight uppercase">
+                        <span className="text-orange-500">Z</span>
+                        <span className="text-white">ERO</span>
+                    </span>
+                    <span className="text-4xl font-black tracking-tight text-white uppercase">NIGHTMARE</span>
                 </h1>
                 <p className="text-slate-400 text-sm">Pilih Combatant untuk memulai simulasi.</p>
             </div>
