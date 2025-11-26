@@ -18,4 +18,4 @@ const nextConfig = {
   reactCompiler: true,
 };
 
-export default withPWA(nextConfig);
+export default nextConfig;
