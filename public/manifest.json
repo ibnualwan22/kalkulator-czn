@@ -1,6 +1,6 @@
 {
   "name": "CZN Calculator",
-  "short_name": "CZN Calc",
+  "short_name": "CZN Calculator",
   "description": "Kalkulator Faint Memory Chaos Zero Nightmare",
   "start_url": "/",
   "display": "standalone",
